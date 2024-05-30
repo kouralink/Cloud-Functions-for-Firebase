@@ -41,7 +41,7 @@ export const onNotificationUpdate = functions.firestore
 
         // Add the user to the team
         await db.collection(`/teams/${teamId}/members`).doc(userId).set({
-          team_id: teamId,
+          teamid: teamId,
           uid: userId,
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -65,7 +65,7 @@ export const onNotificationUpdate = functions.firestore
 
         // Add the user to the team
         await db.collection(`/teams/${teamId}/members`).doc(userId).set({
-          team_id: teamId,
+          teamid: teamId,
           uid: userId,
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -74,28 +74,10 @@ export const onNotificationUpdate = functions.firestore
     }
   });
 
-export const onMemberUpdate = functions.firestore
-  .document("/teams/{teamId}/members/{memberId}")
-  .onWrite(async (change, context) => {
-    const teamId = context.params.teamId;
-    const memberId = context.params.memberId;
-
-    const memberDoc = change.after.exists ? change.after.data() : null;
-    const prevMemberDoc = change.before.exists ? change.before.data() : null;
-
-    if (memberDoc && !prevMemberDoc) {
-      // Member added
-      await handleMemberAdded(teamId, memberId, memberDoc);
-    } else if (!memberDoc && prevMemberDoc) {
-      // Member deleted
-      await handleMemberDeleted(teamId, memberId);
-    }
-  });
-
 interface Member {
   uid: string;
   joinedAt: string;
-  team_id: string;
+  teamid: string;
   role: "coach" | "member";
 }
 export const onMemberChange = functions.firestore
@@ -103,18 +85,14 @@ export const onMemberChange = functions.firestore
   .onWrite(async (change, context) => {
     const teamId = context.params.teamId;
     const memberId = context.params.memberId;
+    //  oMD = old member data, nMData = new member data
+    const nMData = change.after.exists ? (change.after.data() as Member) : null;
+    const oMD = change.before.exists ? (change.before.data() as Member) : null;
 
-    const newMemberData = change.after.exists
-      ? (change.after.data() as Member)
-      : null;
-    const oldMemberData = change.before.exists
-      ? (change.before.data() as Member)
-      : null;
-
-    if (newMemberData && !oldMemberData) {
+    if (nMData && !oMD) {
       // Member added
-      await handleMemberAdded(teamId, memberId, newMemberData);
-    } else if (!newMemberData && oldMemberData) {
+      await handleMemberAdded(teamId, memberId, nMData);
+    } else if (!nMData && oMD) {
       // Member removed
       await handleMemberRemoved(teamId, memberId);
     }
@@ -123,10 +101,12 @@ export const onMemberChange = functions.firestore
 /**
  * Handles the addition of a team member.
  *
- * @param teamId - The ID of the team.
- * @param memberId - The ID of the member.
- * @param memberData - The data of the member (can be null).
- */
+ * @param {string} teamId - The ID of the team.
+ * @param {string} memberId - The ID of the member.
+ * @param {Member} memberData - The data of the member.
+ * @return {Promise<void>} - A promise that resolves when
+ * the operation is complete.
+ * */
 async function handleMemberAdded(
   teamId: string,
   memberId: string,
@@ -157,8 +137,9 @@ async function handleMemberAdded(
     const notification = {
       from_id: teamId,
       to_id: member.id,
-      title: "New Team Member Added",
-      message: `A new ${role} has joined the team.`,
+      title: "New Team Member Joined",
+      message: `${(userDoc.exists && userDoc.data()?.username) || "A"}
+      new ${role} has joined the team.`,
       createdAt: admin.firestore.Timestamp.now(),
       action: null,
       type: "info",
@@ -167,15 +148,25 @@ async function handleMemberAdded(
   });
 }
 
+/**
+ * Handles the removal of a team member.
+ *
+ * @param {string} teamId - The ID of the team.
+ * @param {string} memberId - The ID of the member.
+ * @return {Promise<void>} - A promise that resolves when
+ * the operation is complete.
+ * */
 async function handleMemberRemoved(teamId: string, memberId: string) {
   // Send notifications to all team members
+  const userDoc = await db.collection("users").doc(memberId).get();
   const membersSnapshot = await db.collection(`/teams/${teamId}/members`).get();
   membersSnapshot.forEach(async (member) => {
     const notification = {
       from_id: teamId,
       to_id: member.id,
       title: "Team Member Removed",
-      message: `A member has been removed from the team.`,
+      message: `${(userDoc.exists && userDoc.data()?.username) || "A"} 
+      member has been removed from the team.`,
       createdAt: admin.firestore.Timestamp.now(),
       action: null,
       type: "info",
@@ -183,3 +174,83 @@ async function handleMemberRemoved(teamId: string, memberId: string) {
     await db.collection("notifications").add(notification);
   });
 }
+
+interface ChangeCoachData {
+  coachid: string;
+  memberid: string;
+  teamid: string;
+}
+
+exports.changeCoach = functions.https.onCall(async (data: ChangeCoachData) => {
+  const {coachid, memberid, teamid} = data;
+
+  if (!coachid || !memberid || !teamid) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require (coachid,memberid,teamid) parameters."
+    );
+  }
+
+  if (coachid === memberid) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "The coachid and memberid must be different."
+    );
+  }
+
+  try {
+    // Check if the coach exists and has the role of "coach"
+    const coachDoc = await db
+      .collection("teams")
+      .doc(teamid)
+      .collection("members")
+      .doc(coachid)
+      .get();
+    if (!coachDoc.exists || coachDoc.data()?.role !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified coach does not exist or is not a coach."
+      );
+    }
+
+    // Check if the member exists
+    const memberDoc = await db
+      .collection("teams")
+      .doc(teamid)
+      .collection("members")
+      .doc(memberid)
+      .get();
+    if (!memberDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified member does not exist."
+      );
+    }
+
+    // Update roles in the team members collection
+    await db
+      .collection("teams")
+      .doc(teamid)
+      .collection("members")
+      .doc(coachid)
+      .update({role: "member"});
+    await db
+      .collection("teams")
+      .doc(teamid)
+      .collection("members")
+      .doc(memberid)
+      .update({role: "coach"});
+
+    // Update account types in the users collection
+    await db.collection("users").doc(coachid).update({accountType: "player"});
+    await db.collection("users").doc(memberid).update({accountType: "coach"});
+
+    return {success: true};
+  } catch (error) {
+    console.error("Error updating roles: ", error);
+    throw new functions.https.HttpsError(
+      "unknown",
+      "An error occurred while updating roles."
+    );
+  }
+});
