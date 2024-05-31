@@ -41,7 +41,7 @@ export const onNotificationUpdate = functions.firestore
 
         // Add the user to the team
         await db.collection(`/teams/${teamId}/members`).doc(userId).set({
-          teamid: teamId,
+          team_id: teamId,
           uid: userId,
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -65,7 +65,7 @@ export const onNotificationUpdate = functions.firestore
 
         // Add the user to the team
         await db.collection(`/teams/${teamId}/members`).doc(userId).set({
-          teamid: teamId,
+          team_id: teamId,
           uid: userId,
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
