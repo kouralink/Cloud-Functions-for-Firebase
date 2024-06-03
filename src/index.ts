@@ -858,7 +858,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         "The match is waiting for the refree and only the refree can edit the match."
       );
     }
-    if (matchData.status === "coachs_edit" && (editorid !== matchData.team1.id || editorid !== matchData.team2.id)) {
+    if (matchData.status === "coachs_edit" && editorid !== matchData.team1.id && editorid !== matchData.team2.id) {
       throw new functions.https.HttpsError(
         "failed-precondition",
         "The match is in coachs edit status and only the coachs can edit the match."
