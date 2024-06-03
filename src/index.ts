@@ -840,6 +840,18 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         "The specified match is not a classic match."
       );
     }
+    // check if /teams/{team1.id}/members/{editorid} is exsit and role is coach if it set caoch1 = true
+    let coach1 = false;
+    let coach2 = false;
+    const coach1doc = await db.collection("teams").doc(matchData.team1.id).collection("members").doc(editorid).get();
+    if (coach1doc.exists && coach1doc.data()?.role === "coach") {
+      coach1 = true;
+    }
+    // check if /teams/{team2.id}/members/{editorid} is exsit and role is coach if it set caoch2 = true
+    const coach2doc = await db.collection("teams").doc(matchData.team2.id).collection("members").doc(editorid).get();
+    if (coach2doc.exists && coach2doc.data()?.role === "coach") {
+      coach2 = true;
+    }
     if (matchData.status === "finish" || matchData.status === "cancled") {
       throw new functions.https.HttpsError(
         "failed-precondition",
@@ -852,16 +864,20 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         "The match is in progress and only the refree can edit the match."
       );
     }
-    if (matchData.status === "refree_waiting" && editorid !== matchData.refree.id) {
+    if (matchData.status === "refree_waiting") {
       throw new functions.https.HttpsError(
         "failed-precondition",
-        "The match is waiting for the refree and only the refree can edit the match."
+        "The match is waiting for the refree you can't edit on it until the refree accept the invite."
       );
     }
-    if (matchData.status === "coachs_edit" && editorid !== matchData.team1.id && editorid !== matchData.team2.id) {
+    if (matchData.status === "coachs_edit" && !coach1 && !coach2) {
+      console.log("it s here some how");
+      console.log("editorid", editorid);
+      console.log("team1", matchData.team1.id);
+      console.log("team2", matchData.team2.id);
       throw new functions.https.HttpsError(
         "failed-precondition",
-        "The match is in coachs edit status and only the coachs can edit the match."
+        "The match is in 'coachs_edit' status and only the coachs can edit the match."
       );
     }
 
@@ -874,7 +890,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         );
       }
       // validate refreeid should be refree
-      const refreeDoc = await db.collection("teams").doc(updateData.refreeid).get();
+      const refreeDoc = await db.collection("users").doc(updateData.refreeid).get();
       if (!refreeDoc.exists) {
         throw new functions.https.HttpsError(
           "failed-precondition",
@@ -904,7 +920,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       }
       // check if data is same and the other coach is agree if true send refree invite notification
       // if the new data from editor === old data && the other coach is agreed => send refree invite notification
-      if (matchData.team1.id === editorid ) {
+      if (coach1) {
         if (
           matchData.refree.id === updateData.refreeid &&
           matchData.startIn === updateData.startIn &&
@@ -917,7 +933,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             title: "Refree Invite",
             message: "The match details have been updated by the coachs and waiting for your approval.",
             createdAt: admin.firestore.Timestamp.now(),
-            action: "view",
+            action: null,
             type: "refree_invite",
           };
           await db.collection("notifications").add(notification);
@@ -961,7 +977,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             title: "Refree Invite",
             message: "The match details have been updated by the coachs and waiting for your approval.",
             createdAt: admin.firestore.Timestamp.now(),
-            action: "view",
+            action: null,
             type: "refree_invite",
           };
           await db.collection("notifications").add(notification);
@@ -997,7 +1013,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       // send notification to the other coach
       const notification: NotificationFireStore = {
         from_id: matchid,
-        to_id: editorid === matchData.team1.id ? matchData.team2.id : matchData.team1.id,
+        to_id: coach1 ? matchData.team2.id : matchData.team1.id,
         title: "Match Details Updated",
         message: "The match details have been updated by the other coach.",
         createdAt: admin.firestore.Timestamp.now(),
