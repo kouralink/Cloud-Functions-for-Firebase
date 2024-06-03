@@ -796,7 +796,7 @@ interface refreeEdit {
   };
 }
 interface coachEdit {
-  startIn: Timestamp;
+  startIn: number | Timestamp;
   location: string;
   refreeid: string;
 }
@@ -903,6 +903,10 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
           "The specified user is not a refree."
         );
       }
+      // convert start in from mills to timestamp
+      if (typeof updateData.startIn !== "object") {
+        updateData.startIn = admin.firestore.Timestamp.fromMillis(updateData.startIn);
+      }
       // validate startIn date should be in future
       if (updateData.startIn.toMillis() < Date.now()) {
         throw new functions.https.HttpsError(
@@ -920,10 +924,13 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       }
       // check if data is same and the other coach is agree if true send refree invite notification
       // if the new data from editor === old data && the other coach is agreed => send refree invite notification
+      console.log(matchData.refree.id, " : ", updateData.refreeid);
+      console.log(matchData.startIn?.toMillis(), " : ", updateData.startIn.toMillis());
+      console.log(matchData.location, " : ", updateData.location);
       if (coach1) {
         if (
           matchData.refree.id === updateData.refreeid &&
-          matchData.startIn === updateData.startIn &&
+          matchData.startIn?.toMillis() === updateData.startIn.toMillis() &&
           matchData.location === updateData.location && matchData.team2.isAgreed
         ) {
           // send notification to the refree
