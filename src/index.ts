@@ -802,17 +802,25 @@ interface coachEdit {
 }
 interface UpdateMatchData {
   matchid: string;
-  editorid: string;
   requestUpdateInfo: refreeEdit | coachEdit;
 }
 
-exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData) => {
-  const {matchid, editorid, requestUpdateInfo} = data;
+exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, context) => {
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const editorid = context.auth.uid;
+  const {matchid, requestUpdateInfo} = data;
 
-  if (!matchid || !editorid || !requestUpdateInfo) {
+  if (!matchid || !requestUpdateInfo) {
     throw new functions.https.HttpsError(
       "invalid-argument",
-      "The function require (matchid,editorid,requestUpdateInfo) parameters."
+      "The function require (matchid,requestUpdateInfo) parameters."
     );
   }
 
