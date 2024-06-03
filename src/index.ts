@@ -841,15 +841,31 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       );
     }
     // check if /teams/{team1.id}/members/{editorid} is exsit and role is coach if it set caoch1 = true
+    const team1 = await db.collection("teams").doc(matchData.team1.id).get();
+    const team2 = await db.collection("teams").doc(matchData.team2.id).get();
+    if (!team1.exists) {
+      console.log("team1", team1);
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team1 does not exist."
+      );
+    }
+    if (!team2.exists) {
+      console.log("team2", team2);
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team2 does not exist."
+      );
+    }
+    const team1Name = team1.data()?.teamName;
+    const team2Name = team2.data()?.teamName;
     let coach1 = false;
     let coach2 = false;
-    const coach1doc = await db.collection("teams").doc(matchData.team1.id).collection("members").doc(editorid).get();
-    if (coach1doc.exists && coach1doc.data()?.role === "coach") {
+    if (team1.data()?.role === "coach") {
       coach1 = true;
     }
     // check if /teams/{team2.id}/members/{editorid} is exsit and role is coach if it set caoch2 = true
-    const coach2doc = await db.collection("teams").doc(matchData.team2.id).collection("members").doc(editorid).get();
-    if (coach2doc.exists && coach2doc.data()?.role === "coach") {
+    if (team2.data()?.role === "coach") {
       coach2 = true;
     }
     if (matchData.status === "finish" || matchData.status === "cancled") {
@@ -924,9 +940,6 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       }
       // check if data is same and the other coach is agree if true send refree invite notification
       // if the new data from editor === old data && the other coach is agreed => send refree invite notification
-      console.log(matchData.refree.id, " : ", updateData.refreeid);
-      console.log(matchData.startIn?.toMillis(), " : ", updateData.startIn.toMillis());
-      console.log(matchData.location, " : ", updateData.location);
       if (coach1) {
         if (
           matchData.refree.id === updateData.refreeid &&
@@ -938,7 +951,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             from_id: matchid,
             to_id: updateData.refreeid,
             title: "Refree Invite",
-            message: "The match details have been updated by the coachs and waiting for your approval.",
+            message: `You have invited to a Match as Refree, Between '${team1Name}' And '${team2Name}' at ${updateData.startIn.toDate().toLocaleString()}.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "refree_invite",
@@ -954,7 +967,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             from_id: matchid,
             to_id: matchData.team2.id,
             title: "Match Details Updated",
-            message: "The match details have been acceptd by the other coach.",
+            message: `The match details have been acceptd by the Team ${team1Name} Coach.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "info",
@@ -982,7 +995,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             from_id: matchid,
             to_id: updateData.refreeid,
             title: "Refree Invite",
-            message: "The match details have been updated by the coachs and waiting for your approval.",
+            message: `You have invited to a Match as Refree, Between '${team1Name}' And '${team2Name}' at ${updateData.startIn.toDate().toLocaleString()}.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "refree_invite",
@@ -998,7 +1011,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             from_id: matchid,
             to_id: matchData.team1.id,
             title: "Match Details Updated",
-            message: "The match details have been acceptd by the other coach.",
+            message: `The match details have been acceptd by the Team ${team2Name} Coach.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "info",
@@ -1022,7 +1035,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         from_id: matchid,
         to_id: coach1 ? matchData.team2.id : matchData.team1.id,
         title: "Match Details Updated",
-        message: "The match details have been updated by the other coach.",
+        message: `The match details have been updated by the ${coach1 ? team1Name : team2Name} Coach.`,
         createdAt: admin.firestore.Timestamp.now(),
         action: null,
         type: "info",
