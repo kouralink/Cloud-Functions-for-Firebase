@@ -858,7 +858,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       );
     }
     const team1 = team1Doc.data() as Team;
-    const team2 = team1Doc.data() as Team;
+    const team2 = team2Doc.data() as Team;
     const team1Name = team1?.teamName;
     const team2Name = team2?.teamName;
     let coach1 = false;
