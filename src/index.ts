@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import {Timestamp} from "firebase-admin/firestore";
@@ -9,6 +10,7 @@ type NotificationType = "info"
 | "request_to_join_team"
 | "request_to_join_tournement"
 | "match_chalenge"
+| "refree_invite"
 | "invite_to_team"
 | "invite_to_tournement";
 
@@ -30,17 +32,27 @@ export interface TeamMatch {
   score: number | null;
   isAgreed: boolean;
 }
+export type MatchStatus =
+  | "coachs_edit"
+  | "refree_waiting"
+  | "pending"
+  | "in_progress"
+  | "finish"
+  | "cancled";
 export interface Match {
   id: string;
   team1: TeamMatch;
   team2: TeamMatch;
-  referee_id: string | null;
+  refree:{
+    id:string|null;
+    isAgreed:boolean;
+  };
   createdAt: Timestamp;
   updatedAt: Timestamp;
   startIn: Timestamp|null;
   endedAt: Timestamp|null;
   location: string | null;
-  status: "pending" | "finish" | "cancled";
+  status: MatchStatus;
   type: "tournement" | "classic_match";
 }
 
@@ -82,11 +94,10 @@ export const onNotificationUpdate = functions.firestore
     // Check if the 'action' field was updated for the first time from null
     // to one of the allowed values
     if (
-      !beforeData.action &&
-      afterData.action === "accept") {
+      !beforeData.action) {
       const type = afterData.type;
 
-      if (type === "request_to_join_team") {
+      if (type === "request_to_join_team" && afterData.action === "accept") {
         const userId = afterData.from_id;
         const teamId = afterData.to_id;
         // Check user account type should be player
@@ -205,7 +216,7 @@ export const onNotificationUpdate = functions.firestore
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } else if (type === "invite_to_team") {
+      } else if (type === "invite_to_team" && afterData.action === "accept") {
         const teamId = afterData.from_id;
         const userId = afterData.to_id;
         // Check user account type should be player
@@ -323,7 +334,7 @@ export const onNotificationUpdate = functions.firestore
           role: "member",
           joinedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } else if (type === "match_chalenge") {
+      } else if (type === "match_chalenge" && afterData.action === "accept") {
         const fromId = afterData.from_id; // Team ID
         const toId = afterData.to_id; // Team ID
         // check if fromId and toId are the same
@@ -387,13 +398,16 @@ export const onNotificationUpdate = functions.firestore
           id: matchId,
           team1: {id: fromId, score: null, isAgreed: false},
           team2: {id: toId, score: null, isAgreed: false},
-          referee_id: null,
+          refree: {
+            id: null,
+            isAgreed: false,
+          },
           createdAt: admin.firestore.Timestamp.now(),
           updatedAt: admin.firestore.Timestamp.now(),
           startIn: null,
           endedAt: null,
           location: null,
-          status: "pending",
+          status: "coachs_edit",
           type: "classic_match",
         };
         await db.collection("matches").doc(matchId).set(matchData);
@@ -404,7 +418,7 @@ export const onNotificationUpdate = functions.firestore
           from_id: toId,
           to_id: fromId,
           title: "Match Challenge Accepted",
-          message: `${team2Doc.data()?.teamName}
+          message: `${team2Doc.data()?.teamName} Team
           has accepted your match challenge.`,
           createdAt: admin.firestore.Timestamp.now(),
           action: null,
@@ -417,13 +431,102 @@ export const onNotificationUpdate = functions.firestore
           from_id: fromId,
           to_id: toId,
           title: "Match Created",
-          message: `${team1Doc.data()?.teamName}
-          has created a match.`,
+          message: `The match with Team ${team1Doc.data()?.teamName}
+          has been created.`,
           createdAt: admin.firestore.Timestamp.now(),
           action: null,
           type: "info",
         };
         await db.collection("notifications").add(notification2);
+      } else if (type === "refree_invite") {
+        const matchId = afterData.from_id;
+        const refreeId = afterData.to_id;
+        // check if refreeId is refree
+        const refreeDoc = await db.collection("users").doc(refreeId).get();
+        if (!refreeDoc.exists) {
+          return;
+        }
+        if ((refreeDoc.data() as User)?.accountType !== "refree") {
+          return;
+        }
+        // check if is the match refree is the same as the invite refree
+        const matchDoc = await db.collection("matches").doc(matchId).get();
+        if (!matchDoc.exists) {
+          return;
+        }
+        const matchData = matchDoc.data() as Match;
+        if (matchData.refree.id !== refreeId) {
+          return;
+        }
+        // match status should be refree waiting
+        if (matchData.status !== "refree_waiting") {
+          return;
+        }
+        // update match data
+        if (afterData.action === "decline") {
+          await db.collection("matches").doc(matchId).update({
+            refree: {id: null, isAgreed: false},
+            status: "coachs_edit",
+          });
+          // send notification to the coachs that the refree has declined the invite
+          const notification1: NotificationFireStore = {
+            from_id: matchId,
+            to_id: matchData.team1.id,
+            title: "Refree Invite Declined",
+            message: "The refree has declined the invite.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification1);
+          const notification2: NotificationFireStore = {
+            from_id: matchId,
+            to_id: matchData.team2.id,
+            title: "Refree Invite Declined",
+            message: "The refree has declined the invite.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+        } else if (afterData.action === "accept") {
+          await db.collection("matches").doc(matchId).update({
+            refree: {id: refreeId, isAgreed: true},
+            status: "pending",
+          });
+          // send notification to the refree the match has added to his profile
+          const notification: NotificationFireStore = {
+            from_id: matchId,
+            to_id: refreeId,
+            title: "Match Added",
+            message: "The match has been added to your profile.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification);
+          // send notification to coachs that the refree accept the Invite
+          const notification2: NotificationFireStore = {
+            from_id: matchId,
+            to_id: matchData.team1.id,
+            title: "Refree Invite Accepted",
+            message: "The refree has accepted the invite.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          const notification3: NotificationFireStore = {
+            from_id: matchId,
+            to_id: matchData.team2.id,
+            title: "Refree Invite Accepted",
+            message: "The refree has accepted the invite.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification3);
+        }
       }
     }
   });
@@ -671,3 +774,335 @@ exports.changeCoach = functions.https.onCall(async (data: ChangeCoachData) => {
     );
   }
 });
+
+
+// [x] a callable function fo updating match details by one of coachs or refree
+// [x] this callable functin work just with classic_matchs
+// [x] possiblety edit for coaches is just in the "coachs_edit" status
+// [x] the function will update the match details and send notifications to the other coach
+// [x] possiblety edit for refree is just in the "in_progress" status
+// [x] send notification to the coachs when refree make (edit result, or cancel match, or end match actions)
+// [x] both accept is where the matchdata === udpateData and and other coach is aggredd
+//      => make match in refree waiting status when both coachs agree on the match details
+//      and send invite request to selected refree
+// [x] the match edit_result or end can't be done if the match is not in progress
+// [x] refree can update status match to in progress
+
+interface refreeEdit {
+  type: "edit_result" | "cancel_match" | "end_match" | "set_in_progress";
+  result?: {
+    team1: number;
+    team2: number;
+  };
+}
+interface coachEdit {
+  startIn: Timestamp;
+  location: string;
+  refreeid: string;
+}
+interface UpdateMatchData {
+  matchid: string;
+  editorid: string;
+  requestUpdateInfo: refreeEdit | coachEdit;
+}
+
+exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData) => {
+  const {matchid, editorid, requestUpdateInfo} = data;
+
+  if (!matchid || !editorid || !requestUpdateInfo) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require (matchid,editorid,requestUpdateInfo) parameters."
+    );
+  }
+
+  try {
+    // Check if the match exists
+    const matchDoc = await db.collection("matches").doc(matchid).get();
+    if (!matchDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified match does not exist."
+      );
+    }
+    const matchData = matchDoc.data() as Match;
+    if (matchData.type !== "classic_match") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified match is not a classic match."
+      );
+    }
+    if (matchData.status === "finish" || matchData.status === "cancled") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is already finished or canceled."
+      );
+    }
+    if ((matchData.status === "in_progress" || matchData.status === "pending") && editorid !== matchData.refree.id) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is in progress and only the refree can edit the match."
+      );
+    }
+    if (matchData.status === "refree_waiting" && editorid !== matchData.refree.id) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is waiting for the refree and only the refree can edit the match."
+      );
+    }
+    if (matchData.status === "coachs_edit" && editorid !== matchData.team1.id && editorid !== matchData.team2.id) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is in coachs edit status and only the coachs can edit the match."
+      );
+    }
+
+    if (matchData.status === "coachs_edit") {
+      const updateData = requestUpdateInfo as coachEdit;
+      if (!updateData.startIn || !updateData.location || !updateData.refreeid) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "The function require (startIn,location,refreeid) parameters."
+        );
+      }
+      // validate refreeid should be refree
+      const refreeDoc = await db.collection("teams").doc(updateData.refreeid).get();
+      if (!refreeDoc.exists) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The specified refree does not exist."
+        );
+      }
+      if ((refreeDoc.data() as User)?.accountType !== "refree") {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The specified user is not a refree."
+        );
+      }
+      // validate startIn date should be in future
+      if (updateData.startIn.toMillis() < Date.now()) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The match start date should be in future."
+        );
+      }
+      // validate location should be google map locaiton
+      const googleMapsLinkRegex = /^https:\/\/(www\.)?google\.com\/maps\/place\/[^/]+\/@[0-9.-]+,[0-9.-]+,?[0-9]*z\/data=.*$/;
+      if (!googleMapsLinkRegex.test(updateData.location)) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The location should be a google maps link."
+        );
+      }
+      // check if data is same and the other coach is agree if true send refree invite notification
+      // if the new data from editor === old data && the other coach is agreed => send refree invite notification
+      if (matchData.team1.id === editorid ) {
+        if (
+          matchData.refree.id === updateData.refreeid &&
+          matchData.startIn === updateData.startIn &&
+          matchData.location === updateData.location && matchData.team2.isAgreed
+        ) {
+          // send notification to the refree
+          const notification: NotificationFireStore = {
+            from_id: matchid,
+            to_id: updateData.refreeid,
+            title: "Refree Invite",
+            message: "The match details have been updated by the coachs and waiting for your approval.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: "view",
+            type: "refree_invite",
+          };
+          await db.collection("notifications").add(notification);
+          // update match data
+          await db.collection("matches").doc(matchid).update({
+            team1: {id: matchData.team1.id, score: null, isAgreed: true},
+            status: "refree_waiting",
+          });
+          // send notification to other caoch that the coach has accept the match details
+          const notification2: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team2.id,
+            title: "Match Details Updated",
+            message: "The match details have been acceptd by the other coach.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        } else {
+          await db.collection("matches").doc(matchid).update({
+            team1: {id: matchData.team1.id, score: null, isAgreed: true},
+            team2: {id: matchData.team2.id, score: null, isAgreed: false},
+            refree: {id: updateData.refreeid, isAgreed: false},
+            startIn: updateData.startIn,
+            location: updateData.location,
+            status: "coachs_edit",
+          });
+        }
+      } else {
+        if (
+          matchData.refree.id === updateData.refreeid &&
+          matchData.startIn === updateData.startIn &&
+          matchData.location === updateData.location && matchData.team1.isAgreed
+        ) {
+          // send notification to the refree
+          const notification: NotificationFireStore = {
+            from_id: matchid,
+            to_id: updateData.refreeid,
+            title: "Refree Invite",
+            message: "The match details have been updated by the coachs and waiting for your approval.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: "view",
+            type: "refree_invite",
+          };
+          await db.collection("notifications").add(notification);
+          // update match data
+          await db.collection("matches").doc(matchid).update({
+            team2: {id: matchData.team1.id, score: null, isAgreed: true},
+            status: "refree_waiting",
+          });
+          // send notification to other caoch that the coach has accept the match details
+          const notification2: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team1.id,
+            title: "Match Details Updated",
+            message: "The match details have been acceptd by the other coach.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        } else {
+          await db.collection("matches").doc(matchid).update({
+            team1: {id: matchData.team1.id, score: null, isAgreed: false},
+            team2: {id: matchData.team2.id, score: null, isAgreed: true},
+            refree: {id: updateData.refreeid, isAgreed: false},
+            startIn: updateData.startIn,
+            location: updateData.location,
+            status: "coachs_edit",
+          });
+        }
+      }
+
+      // send notification to the other coach
+      const notification: NotificationFireStore = {
+        from_id: matchid,
+        to_id: editorid === matchData.team1.id ? matchData.team2.id : matchData.team1.id,
+        title: "Match Details Updated",
+        message: "The match details have been updated by the other coach.",
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification);
+    }
+
+    if (matchData.status === "in_progress" || matchData.status === "pending") {
+      const updateData = requestUpdateInfo as refreeEdit;
+      if ((matchData.status === "pending") && !(updateData.type === "set_in_progress" || updateData.type === "cancel_match")) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The match is pending and only the refree can set it in progress or cancel it."
+        );
+      }
+      if (updateData.type === "set_in_progress") {
+        // update match data
+        await db.collection("matches").doc(matchid).update({
+          status: "in_progress",
+        });
+      } else if (updateData.type === "edit_result") {
+        if (!updateData.result) {
+          throw new functions.https.HttpsError(
+            "invalid-argument",
+            "The function require result parameter."
+          );
+        }
+        // update match data
+        await db.collection("matches").doc(matchid).update({
+          team1: {id: matchData.team1.id, score: updateData.result.team1, isAgreed: true},
+          team2: {id: matchData.team2.id, score: updateData.result.team2, isAgreed: true},
+          refree: {id: matchData.refree.id, isAgreed: true},
+          status: "in_progress",
+        });
+      } else if (updateData.type === "cancel_match") {
+        // update match data
+        await db.collection("matches").doc(matchid).update({
+          status: "cancled",
+        });
+      } else if (updateData.type === "end_match") {
+        // update match data
+        // not possible to end match if result null for team1 or team2
+        if (!matchData.team1.score || !matchData.team2.score) {
+          throw new functions.https.HttpsError(
+            "invalid-argument",
+            "The match result should be not be for both teams."
+          );
+        }
+        await db.collection("matches").doc(matchid).update({
+          status: "finish",
+          endedAt: admin.firestore.Timestamp.now(),
+        });
+      }
+
+      // send notification to the coachs
+      const notification1: NotificationFireStore = {
+        from_id: matchid,
+        to_id: matchData.team1.id,
+        title: "Match Details Updated",
+        message: "The match details have been updated by the refree.",
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification1);
+
+      const notification2: NotificationFireStore = {
+        from_id: matchid,
+        to_id: matchData.team2.id,
+        title: "Match Details Updated",
+        message: "The match details have been updated by the refree.",
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification2);
+
+      // send notification to winner
+      if (updateData.type === "end_match" && matchData.team1.score && matchData.team2.score && matchData.team1.score !== matchData.team2.score) {
+        // send notification for only winner not in draw or lose
+        if (matchData.team1.score > matchData.team2.score) {
+          const notification3: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team1.id,
+            title: "Yeaaaah",
+            message: "Congratulations! You have won the match.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification3);
+        } else if (matchData.team1.score < matchData.team2.score) {
+          const notification3: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team2.id,
+            title: "Yeaaaah",
+            message: "Congratulations! You have won the match.",
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification3);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error updating match: ", error);
+    throw new functions.https.HttpsError(
+      "unknown",
+      "An error occurred while updating match."
+    );
+  }
+});
+
