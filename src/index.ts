@@ -841,31 +841,35 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       );
     }
     // check if /teams/{team1.id}/members/{editorid} is exsit and role is coach if it set caoch1 = true
-    const team1 = await db.collection("teams").doc(matchData.team1.id).get();
-    const team2 = await db.collection("teams").doc(matchData.team2.id).get();
-    if (!team1.exists) {
-      console.log("team1", team1);
+    const team1Doc = await db.collection("teams").doc(matchData.team1.id).get();
+    const team2Doc = await db.collection("teams").doc(matchData.team2.id).get();
+    if (!team1Doc.exists) {
+      console.log("team1", team1Doc);
       throw new functions.https.HttpsError(
         "failed-precondition",
         "The team1 does not exist."
       );
     }
-    if (!team2.exists) {
-      console.log("team2", team2);
+    if (!team2Doc.exists) {
+      console.log("team2", team2Doc);
       throw new functions.https.HttpsError(
         "failed-precondition",
         "The team2 does not exist."
       );
     }
-    const team1Name = team1.data()?.teamName;
-    const team2Name = team2.data()?.teamName;
+    const team1 = team1Doc.data() as Team;
+    const team2 = team1Doc.data() as Team;
+    const team1Name = team1?.teamName;
+    const team2Name = team2?.teamName;
     let coach1 = false;
     let coach2 = false;
-    if (team1.data()?.role === "coach") {
+    const coach1doc = await db.collection("teams").doc(matchData.team1.id).collection("members").doc(editorid).get();
+    if (coach1doc.exists && coach1doc.data()?.role === "coach") {
       coach1 = true;
     }
     // check if /teams/{team2.id}/members/{editorid} is exsit and role is coach if it set caoch2 = true
-    if (team2.data()?.role === "coach") {
+    const coach2doc = await db.collection("teams").doc(matchData.team2.id).collection("members").doc(editorid).get();
+    if (coach2doc.exists && coach2doc.data()?.role === "coach") {
       coach2 = true;
     }
     if (matchData.status === "finish" || matchData.status === "cancled") {
