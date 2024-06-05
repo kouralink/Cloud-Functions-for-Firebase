@@ -776,18 +776,7 @@ exports.changeCoach = functions.https.onCall(async (data: ChangeCoachData) => {
 });
 
 
-// [x] a callable function fo updating match details by one of coachs or refree
-// [x] this callable functin work just with classic_matchs
-// [x] possiblety edit for coaches is just in the "coachs_edit" status
-// [x] the function will update the match details and send notifications to the other coach
-// [x] possiblety edit for refree is just in the "in_progress" status
-// [x] send notification to the coachs when refree make (edit result, or cancel match, or end match actions)
-// [x] both accept is where the matchdata === udpateData and and other coach is aggredd
-//      => make match in refree waiting status when both coachs agree on the match details
-//      and send invite request to selected refree
-// [x] the match edit_result or end can't be done if the match is not in progress
-// [x] refree can update status match to in progress
-
+// Update match callable function Types
 interface refreeEdit {
   type: "edit_result" | "cancel_match" | "end_match" | "set_in_progress";
   result?: {
@@ -804,6 +793,20 @@ interface UpdateMatchData {
   matchid: string;
   requestUpdateInfo: refreeEdit | coachEdit;
 }
+
+// Update match callable function implementation
+// it's for updating match details by one of coachs or refree
+// this callable functin work just with classic_matchs
+// possiblety edit for coaches is just in the "coachs_edit" status
+// the function will update the match details and send notifications to the other coach
+// possiblety edit for refree is just in the "in_progress" status
+// send notification to the coachs when refree make (edit result, or cancel match, or end match actions)
+// both accept is where the matchdata === udpateData and and other coach is aggredd
+// make match in refree waiting status when both coachs agree on the match details
+// and send invite request to selected refree
+// the match edit_result or end can't be done if the match is not in progress
+// refree can update status match to in progress after accept the invite
+
 
 exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, context) => {
   // require auth
