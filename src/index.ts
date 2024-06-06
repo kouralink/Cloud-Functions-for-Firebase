@@ -637,14 +637,24 @@ interface ChangeCoachData {
   memberid: string;
   teamid: string;
 }
+// get coach id from context auth user id
+exports.changeCoach = functions.https.onCall(async (data: ChangeCoachData, context) => {
+  const {memberid, teamid} = data;
 
-exports.changeCoach = functions.https.onCall(async (data: ChangeCoachData) => {
-  const {coachid, memberid, teamid} = data;
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const coachid = context.auth.uid;
 
-  if (!coachid || !memberid || !teamid) {
+  if (!memberid || !teamid) {
     throw new functions.https.HttpsError(
       "invalid-argument",
-      "The function require (coachid,memberid,teamid) parameters."
+      "The function require (memberid,teamid) parameters."
     );
   }
 
@@ -1156,4 +1166,109 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
     );
   }
 });
+
+
+// leave team for coach
+//  the auth user context id should be the user who call the function
+// should be a coach and have ateam
+// the team should be empty that's mean there's no members expet the coach
+// the team should not have any matchs in not finsish or cancled status
+// after leave team the team name should be update to "_"
+// send notification to coach that the team has been deleted
+
+exports.leaveTeamForCoach = functions.https.onCall(async (data, context) => {
+  const {teamId} = data;
+
+  if (!teamId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require teamId parameter."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const coachid = context.auth.uid;
+
+  try {
+    // Check if the coach exists in memebers subcollection and has the role of "coach"
+    const coachDoc = await db.collection("teams").doc(teamId).collection("members").doc(coachid).get();
+
+    if (!coachDoc.exists || coachDoc.data()?.role !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified coach does not exist or is not a coach."
+      );
+    }
+
+    // Check if the team exists
+    const teamDoc = await db.collection("teams").doc(teamId).get();
+    const teamData = teamDoc.data() as Team;
+    if (teamData.teamName === "_") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team is already deleted."
+      );
+    }
+    // check if the team is empty
+    const membersSnapshot = await db.collection(`/teams/${teamId}/members`).get();
+    if (membersSnapshot.size > 1) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team is not empty."
+      );
+    }
+    // check if the team has any matchs in not finsish or cancled status team1.id and team2.id
+    const matchsSnapshot = await db.collection("matches").where("team1.id", "==", teamId).where("status", "not-in", ["finish", "cancled"]).get();
+    if (!matchsSnapshot.empty) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team has matchs in not finsish or cancled status."
+      );
+    }
+
+    // check for team2.id
+    const matchsSnapshot2 = await db.collection("matches").where("team2.id", "==", teamId).where("status", "not-in", ["finish", "cancled"]).get();
+    if (!matchsSnapshot2.empty) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team has matchs in not finsish or cancled status."
+      );
+    }
+
+
+    // update team name to "_"
+    await db.collection("teams").doc(teamId).update({teamName: "_"});
+
+    // remove coach from team members
+    await db.collection("teams").doc(teamId).collection("members").doc(coachid).delete();
+
+
+    // send notification to coach that the team has been deleted
+    const notification: NotificationFireStore = {
+      from_id: teamId,
+      to_id: coachid,
+      title: "Team Deleted",
+      message: "The team has been deleted.",
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification);
+
+    return {success: true};
+  } catch (error) {
+    console.error("Error Leave Team For coach: ", error);
+    throw new functions.https.HttpsError(
+      "unknown",
+      "An error occurred while Leave Team For coach."
+    );
+  }
+}
+);
 
