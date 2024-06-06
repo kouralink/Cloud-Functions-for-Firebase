@@ -1080,11 +1080,12 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
             "The function require result parameter."
           );
         }
-        // update match data
+        // update match data on update the status to in progress update the date start in to timestamp now
         await db.collection("matches").doc(matchid).update({
           team1: {id: matchData.team1.id, score: updateData.result.team1, isAgreed: true},
           team2: {id: matchData.team2.id, score: updateData.result.team2, isAgreed: true},
           refree: {id: matchData.refree.id, isAgreed: true},
+          startIn: admin.firestore.Timestamp.now(),
           status: "in_progress",
         });
       } else if (updateData.type === "cancel_match") {
