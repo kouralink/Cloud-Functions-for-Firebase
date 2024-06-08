@@ -56,9 +56,11 @@ export interface Match {
   type: "tournement" | "classic_match";
 }
 
+type accountT = "user" | "coach" | "refree" | "tournament_manager" | "player";
+
 export interface User {
   username: string;
-  accountType: "user" | "coach" | "tournement_manager" | "refree" | "player";
+  accountType: accountT;
   bio?: string;
   birthday?: Timestamp;
   joinDate?: Timestamp;
@@ -1268,6 +1270,528 @@ exports.leaveTeamForCoach = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError(
       "unknown",
       "An error occurred while Leave Team For coach."
+    );
+  }
+}
+);
+
+// // Ensure unique username on create/update
+// exports.ensureUniqueUsername = functions.firestore
+//   .document("users/{userId}")
+//   .onWrite(async (change, context) => {
+//     const newValue = change.after.exists ? change.after.data() : null;
+//     const oldValue = change.before.exists ? change.before.data() : null;
+
+//     // Check if username field exists and meets length requirements
+//     if (newValue && newValue.username) {
+//       const username = newValue.username;
+//       if (username.length < 4 || username.length > 30) {
+//         throw new functions.https.HttpsError("invalid-argument", "Username must be between 4 and 30 characters.");
+//       }
+
+//       // Check if username is unique
+//       const usersRef = admin.firestore().collection("users");
+//       const querySnapshot = await usersRef.where("username", "==", username).get();
+//       if (!querySnapshot.empty) {
+//         // If there are any documents with the same username, check if it's not the same document being updated
+//         const isUnique = querySnapshot.docs.every((doc) => doc.id === context.params.userId);
+//         if (!isUnique) {
+//           throw new functions.https.HttpsError("already-exists", "Username is already taken.");
+//         }
+//       }
+//     }
+
+//     // If deleting a user or if username was not changed, no need to check
+//     if (!newValue || (oldValue && oldValue.username === newValue.username)) {
+//       return null;
+//     }
+
+//     return null;
+//   });
+
+
+// // Ensure unique team name on create/update
+// exports.ensureUniqueTeamName = functions.firestore
+//   .document("teams/{teamId}")
+//   .onWrite(async (change, context) => {
+//     const newValue = change.after.exists ? change.after.data() : null;
+//     const oldValue = change.before.exists ? change.before.data() : null;
+//     // Check if team name field exists and meets length requirements
+//     if (newValue && newValue.teamName) {
+//       const teamName = newValue.teamName;
+//       if (teamName.length < 4 || teamName.length > 30) {
+//         throw new functions.https.HttpsError("invalid-argument", "Team name must be between 4 and 30 characters.");
+//       }
+//       // Check if team name is unique
+//       const teamsRef = admin.firestore().collection("teams");
+//       const querySnapshot = await teamsRef.where("teamName", "==", teamName).get();
+//       if (!querySnapshot.empty) {
+//         // If there are any documents with the same team name, check if it's not the same document being updated
+//         const isUnique = querySnapshot.docs.every((doc) => doc.id === context.params.teamId);
+//         if (!isUnique) {
+//           throw new functions.https.HttpsError("already-exists", "Team name is already taken.");
+//         }
+//       }
+//     }
+//     // If deleting a team or if team name was not changed, no need to check
+//     if (!newValue || (oldValue && oldValue.teamName === newValue.teamName)) {
+//       return null;
+//     }
+//     return null;
+//   });
+
+// create team callback function
+
+interface TeamData {
+  teamName: string;
+  teamLogo: string;
+  teamDescription: string;
+}
+
+exports.createTeam = functions.https.onCall(async (data: TeamData, context) => {
+  const {teamName, teamLogo, teamDescription} = data;
+
+  if (!teamName || !teamLogo || !teamDescription) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require (teamName,teamLogo,teamDescription) parameters."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const coachid = context.auth.uid;
+
+  try {
+    // check if user account is coach
+    const userDoc = await db.collection("users").doc(coachid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    if (userData.accountType !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user is not a coach."
+      );
+    }
+    // checking if the user is in the members subcollections using collection Group
+    const membersSnapshot = await db.collectionGroup("members").where("uid", "==", coachid).get();
+    if (!membersSnapshot.empty) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The coach is already a member of a team."
+      );
+    }
+
+    // Check if the team name is unique
+    const teamsRef = db.collection("teams");
+    const querySnapshot = await teamsRef.where("teamName", "==", teamName).get();
+    if (!querySnapshot.empty) {
+      throw new functions.https.HttpsError("already-exists", "Team name is already taken.");
+    }
+    // Create a new team document
+    const newTeam = {
+      teamName: teamName,
+      teamLogo: teamLogo,
+      description: teamDescription,
+      createdAt: admin.firestore.Timestamp.now(),
+      createdBy: coachid,
+      updatedAt: admin.firestore.Timestamp.now(),
+      blackList: [],
+    };
+    const teamRef = await db.collection("teams").add(newTeam);
+
+    // Add the coach as the first member of the team
+    await db.collection("teams").doc(teamRef.id).collection("members").doc(coachid).set({
+      team_id: teamRef.id,
+      uid: coachid,
+      joinedAt: admin.firestore.Timestamp.now(),
+      role: "coach",
+    });
+
+    return {success: true, teamId: teamRef.id};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error creating team: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while creating team."
+    );
+  }
+});
+
+// update team callable function
+
+interface UpdateTeamData {
+  teamId: string;
+  teamName?: string;
+  teamLogo?: string;
+  teamDescription?: string;
+}
+
+exports.updateTeam = functions.https.onCall(async (data: UpdateTeamData, context) => {
+  const {teamId, teamName, teamLogo, teamDescription} = data;
+
+  if (!teamId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require teamId parameter."
+    );
+  }
+  if (!teamName && !teamLogo && !teamDescription) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require at least one parameter to update."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const coachid = context.auth.uid;
+
+  try {
+    // check if user account is coach
+    const userDoc = await db.collection("users").doc(coachid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    if (userData.accountType !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user is not a coach."
+      );
+    }
+    // check if the team exists
+    const teamDoc = await db.collection("teams").doc(teamId).get();
+    if (!teamDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified team does not exist."
+      );
+    }
+    // const teamData = teamDoc.data() as Team;
+    // ceck if the coach is member of team and have coach role
+    const coachDoc = await db.collection("teams").doc(teamId).collection("members").doc(coachid).get();
+    if (!coachDoc.exists || coachDoc.data()?.role !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified coach is not a coach in the team."
+      );
+    }
+
+
+    // Check if the team name is unique
+    if (teamName) {
+      const teamsRef = db.collection("teams");
+      const querySnapshot = await teamsRef.where("teamName", "==", teamName).get();
+      if (!querySnapshot.empty) {
+        throw new functions.https.HttpsError("already-exists", "Team name is already taken.");
+      }
+    }
+
+    // Update the team document with the new data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {updatedAt: admin.firestore.Timestamp.now()};
+    if (teamName) {
+      updateData.teamName = teamName;
+    }
+    if (teamLogo) {
+      updateData.teamLogo = teamLogo;
+    }
+    if (teamDescription) {
+      updateData.description = teamDescription;
+    }
+    await db.collection("teams").doc(teamId).update(updateData);
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error: any) {
+    console.error("Error updating team: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while updating team."
+    );
+  }
+}
+);
+
+// create user callback function
+interface UserData {
+  username: string;
+  firstName?:string;
+  lastName?:string;
+  avatar?:string;
+}
+
+exports.createUser = functions.https.onCall(async (data: UserData, context) => {
+  const {username, firstName, lastName, avatar} = data;
+
+  if (!username) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require username parameter."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const uid = context.auth.uid;
+
+  try {
+    // check if user already doc already exists
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The user already exists."
+      );
+    }
+    let eusername = username.toLowerCase();
+    // username should be between 4 and 30 characters
+    if (eusername.length < 4 ) {
+      eusername += Math.random().toString(36).substring(7).toLowerCase();
+    }
+    if (eusername.length > 30) {
+      eusername = eusername.substring(0, 30);
+    }
+    // Check if the username is unique if not add to it rand string and check again
+    const usersRef = db.collection("users");
+    let querySnapshot = await usersRef.where("username", "==", eusername).get();
+    while (!querySnapshot.empty) {
+      querySnapshot = await usersRef.where("username", "==", eusername).get();
+      if (querySnapshot.empty) {
+        break;
+      }
+      eusername += Math.random().toString(36).substring(7).toLowerCase();
+    }
+
+    const newUser = {
+      username: eusername,
+      firstName: firstName || null,
+      lastName: lastName || null,
+      avatar: avatar || null,
+      accountType: "user",
+      joinDate: admin.firestore.Timestamp.now(),
+      gender: "male",
+    };
+    await db.collection("users").doc(uid).set(newUser);
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error: any) {
+    console.error("Error creating user: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while creating user."
+    );
+  }
+});
+
+// update user callable function
+interface UpdateUserData {
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  bio?: string;
+  avatar?: string;
+  birthday?: admin.firestore.Timestamp;
+  gender: "male"|"female";
+  address?: string;
+  phoneNumbers?: string[];
+}
+
+exports.updateUser = functions.https.onCall(async (data: UpdateUserData, context) => {
+  const {username, firstName, lastName, bio, avatar, birthday, gender, address, phoneNumbers} = data;
+
+  if (!username && !firstName && !lastName && !bio && !avatar && !gender && !address && !phoneNumbers) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require at least one parameter to update."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const uid = context.auth.uid;
+
+  try {
+    // check if user doc exists
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The user does not exist."
+      );
+    }
+    // Check if the username is unique
+    if (username) {
+      // username should be lowercase thwo error
+      const eusername = username.toLowerCase();
+      // username should be between 4 and 30 characters
+      if (eusername.length < 4 || eusername.length > 30) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Username must be between 4 and 30 characters."
+        );
+      }
+
+      const usersRef = db.collection("users");
+      const querySnapshot = await usersRef.where("username", "==", eusername).get();
+      if (!querySnapshot.empty) {
+        throw new functions.https.HttpsError("already-exists", "Username is already taken.");
+      }
+    }
+
+    // Update the user document with the new data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {};
+    if (username) {
+      updateData.username = username.toLowerCase();
+    }
+    if (firstName) {
+      updateData.firstName = firstName;
+    }
+    if (lastName) {
+      updateData.lastName = lastName;
+    }
+    if (bio) {
+      updateData.bio = bio;
+    }
+    if (avatar) {
+      updateData.avatar = avatar;
+    }
+    if (birthday) {
+      updateData.birthday = birthday;
+    }
+    if (gender) {
+      updateData.gender = gender;
+    }
+    if (address) {
+      updateData.address = address;
+    }
+    if (phoneNumbers) {
+      updateData.phoneNumbers = phoneNumbers;
+    }
+    await db.collection("users").doc(uid).update(updateData);
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error updating user: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while updating user."
+    );
+  }
+}
+);
+
+
+// change account type callable function get user from context auth and update user doc
+
+
+exports.changeAccountType = functions.https.onCall(async (data: {accountType: accountT}, context) => {
+  const {accountType} = data;
+
+  if (!accountType) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require accountType parameter."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const uid = context.auth.uid;
+
+  try {
+    // send not supported yet for account type == tournament manager
+    if (accountType === "tournament_manager") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The action not supported yet."
+      );
+    }
+    // check if user doc exists
+    const userDoc = await db.collection("users").doc(uid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    // check if account type of user is same to what the user want to change to
+    if (userData.accountType === accountType) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The user account type is already the same."
+      );
+    }
+    // if user account type was coach or player check if player is member of a team before change is to new account type
+    if (userData.accountType === "coach" || userData.accountType === "player") {
+      const membersSnapshot = await db.collectionGroup("members").where("uid", "==", uid).get();
+      if (!membersSnapshot.empty) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The user is already a member of a team."
+        );
+      }
+    }
+    // if account type is refree check if the user is refree in any match have status not finish or cancled or in coachs_edit status
+    if (userData.accountType === "refree") {
+      const matchsSnapshot = await db.collection("matches").where("refree.id", "==", uid).where("status", "not-in", ["finish", "cancled", "coachs_edit"]).get();
+      if (!matchsSnapshot.empty) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The user is refree in a match that is not finish or cancled."
+        );
+      }
+    }
+
+    // Update the user document with the new data
+    await db.collection("users").doc(uid).update({accountType: accountType});
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error changing account type: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while changing account type."
     );
   }
 }
