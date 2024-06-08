@@ -819,7 +819,6 @@ interface UpdateMatchData {
 // the match edit_result or end can't be done if the match is not in progress
 // refree can update status match to in progress after accept the invite
 
-
 exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, context) => {
   // require auth
   if (!context.auth) {
@@ -896,7 +895,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
     if ((matchData.status === "in_progress" || matchData.status === "pending") && editorid !== matchData.refree.id && matchData.refree.isAgreed) {
       throw new functions.https.HttpsError(
         "failed-precondition",
-        "The match is in progress and only the refree can edit the match."
+        "The match is pending or in progress and only the refree can edit the match."
       );
     }
     if (matchData.status === "refree_waiting") {
@@ -1161,15 +1160,157 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         }
       }
     }
-  } catch (error) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
     console.error("Error updating match: ", error);
     throw new functions.https.HttpsError(
-      "unknown",
-      "An error occurred while updating match."
+      error.code || "unknown",
+      error.message || "An error occurred while updating match."
     );
   }
 });
 
+// [x] : the coach can cancel match that is in coachs_edit or refree_waiting or pending status
+// [x] : test if the editor is one of coach of team1 or team2
+// [x] : send notification to the other coach that the match has been canceled by other team {teanName}
+// [x] : send notification to refree in pending status that the match has canceld by team {teanName}
+// [x] : this callable functin work just with classic_matchs
+// [x] : the function will update the match status to "cancled" and send notifications to the other coach
+// and refree if the match status is "pending"
+
+// cancel match callable function Types
+interface CancelMatchData {
+  matchid: string;
+}
+// cancel match callable function implementation
+exports.cancelMatch = functions.https.onCall(async (data: CancelMatchData, context) => {
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const editorid = context.auth.uid;
+  const {matchid} = data;
+
+  if (!matchid) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require matchid parameter."
+    );
+  }
+
+  try {
+    // Check if the match exists
+    const matchDoc = await db.collection("matches").doc(matchid).get();
+    if (!matchDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified match does not exist."
+      );
+    }
+    const matchData = matchDoc.data() as Match;
+    if (matchData.type !== "classic_match") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified match is not a classic match."
+      );
+    }
+    // check if /teams/{team1.id}/members/{editorid} is exsit and role is coach if it set caoch1 = true
+    const team1Doc = await db.collection("teams").doc(matchData.team1.id).get();
+    const team2Doc = await db.collection("teams").doc(matchData.team2.id).get();
+    if (!team1Doc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team1 does not exist."
+      );
+    }
+    if (!team2Doc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team2 does not exist."
+      );
+    }
+    const team1 = team1Doc.data() as Team;
+    const team2 = team2Doc.data() as Team;
+    const team1Name = team1?.teamName;
+    const team2Name = team2?.teamName;
+    let coach1 = false;
+    let coach2 = false;
+    const coach1doc = await db.collection("teams").doc(matchData.team1.id).collection("members").doc(editorid).get();
+    if (coach1doc.exists && coach1doc.data()?.role === "coach") {
+      coach1 = true;
+    }
+    // check if /teams/{team2.id}/members/{editorid} is exsit and role is coach if it set caoch2 = true
+    const coach2doc = await db.collection("teams").doc(matchData.team2.id).collection("members").doc(editorid).get();
+    if (coach2doc.exists && coach2doc.data()?.role === "coach") {
+      coach2 = true;
+    }
+
+    // test if the editor is the one of coachs if not throw error
+    if (!coach1 && !coach2) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The editor is not a coach of any team."
+      );
+    }
+    if (matchData.status === "finish" || matchData.status === "cancled") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is already finished or canceled."
+      );
+    }
+    if (matchData.status === "in_progress") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The match is in progress and can't be canceled."
+      );
+    }
+    // cancel match
+    if (matchData.status === "coachs_edit" || matchData.status === "refree_waiting" || matchData.status === "pending") {
+      // update match data
+      await db.collection("matches").doc(matchid).update({
+        status: "cancled",
+      });
+
+      // send notification to the other coach
+      const notification1: NotificationFireStore = {
+        from_id: matchid,
+        to_id: coach1 ? matchData.team2.id : matchData.team1.id,
+        title: "Match Canceled",
+        message: `The match has been canceled by the ${coach1 ? team1Name : team2Name} Coach.`,
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification1);
+
+      // send notification to refree in pending status
+      if (matchData.status === "pending") {
+        const notification2: NotificationFireStore = {
+          from_id: matchid,
+          to_id: matchData.refree.id as string,
+          title: "Match Canceled",
+          message: `The match has been canceled by the ${coach1 ? team1Name : team2Name} Coach.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification2);
+      }
+    }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error canceling match: ", error);
+    throw new functions.https.HttpsError(
+      error.code || "unknown",
+      error.message || "An error occurred while canceling match."
+    );
+  }
+}
+);
 
 // leave team for coach
 //  the auth user context id should be the user who call the function
@@ -1762,15 +1903,7 @@ exports.changeAccountType = functions.https.onCall(async (data: {accountType: ac
   }
   // get uid
   const uid = context.auth.uid;
-
   try {
-    // send not supported yet for account type == tournament manager
-    if (accountType === "tournament_manager") {
-      throw new functions.https.HttpsError(
-        "failed-precondition",
-        "The action not supported yet."
-      );
-    }
     // check if user doc exists
     const userDoc = await db.collection("users").doc(uid).get();
     if (!userDoc.exists) {
@@ -1822,4 +1955,3 @@ exports.changeAccountType = functions.https.onCall(async (data: {accountType: ac
   }
 }
 );
-
