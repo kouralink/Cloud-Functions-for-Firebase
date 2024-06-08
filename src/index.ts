@@ -1368,6 +1368,19 @@ exports.createTeam = functions.https.onCall(async (data: TeamData, context) => {
   const coachid = context.auth.uid;
 
   try {
+    // team name should be between 4 and 30 caracters and lower case
+    if (teamName.length < 4 || teamName.length > 30) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Team name must be between 4 and 30 characters."
+      );
+    }
+    if (teamName !== teamName.toLowerCase()) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Team name must be in lower case."
+      );
+    }
     // check if user account is coach
     const userDoc = await db.collection("users").doc(coachid).get();
     if (!userDoc.exists) {
@@ -1464,6 +1477,19 @@ exports.updateTeam = functions.https.onCall(async (data: UpdateTeamData, context
   const coachid = context.auth.uid;
 
   try {
+    // team name should be between 4 and 30 caracters and lower case
+    if (teamName && (teamName.length < 4 || teamName.length > 30)) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Team name must be between 4 and 30 characters."
+      );
+    }
+    if (teamName && teamName !== teamName.toLowerCase()) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Team name must be in lower case."
+      );
+    }
     // check if user account is coach
     const userDoc = await db.collection("users").doc(coachid).get();
     if (!userDoc.exists) {
