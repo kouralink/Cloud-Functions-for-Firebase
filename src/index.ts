@@ -1096,11 +1096,11 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         });
       } else if (updateData.type === "end_match") {
         // update match data
-        // not possible to end match if result null for team1 or team2
-        if (!matchData.team1.score || !matchData.team2.score) {
+        // not possible to end match if result null for team1 or team2 so it's should be 0 or more
+        if ( matchData.team1.score === null || matchData.team2.score === null) {
           throw new functions.https.HttpsError(
             "invalid-argument",
-            "The match result should be not be for both teams."
+            "The match result should be not null for both teams."
           );
         }
         await db.collection("matches").doc(matchid).update({
@@ -1317,7 +1317,6 @@ exports.cancelMatch = functions.https.onCall(async (data: CancelMatchData, conte
 // should be a coach and have ateam
 // the team should be empty that's mean there's no members expet the coach
 // the team should not have any matchs in not finsish or cancled status
-// after leave team the team name should be update to "_"
 // send notification to coach that the team has been deleted
 
 exports.leaveTeamForCoach = functions.https.onCall(async (data, context) => {
@@ -1351,14 +1350,14 @@ exports.leaveTeamForCoach = functions.https.onCall(async (data, context) => {
     }
 
     // Check if the team exists
-    const teamDoc = await db.collection("teams").doc(teamId).get();
-    const teamData = teamDoc.data() as Team;
-    if (teamData.teamName === "_") {
-      throw new functions.https.HttpsError(
-        "failed-precondition",
-        "The team is already deleted."
-      );
-    }
+    // const teamDoc = await db.collection("teams").doc(teamId).get();
+    // const teamData = teamDoc.data() as Team;
+    // if (teamData.teamName === "_") {
+    //   throw new functions.https.HttpsError(
+    //     "failed-precondition",
+    //     "The team is already deleted."
+    //   );
+    // }
     // check if the team is empty
     const membersSnapshot = await db.collection(`/teams/${teamId}/members`).get();
     if (membersSnapshot.size > 1) {
@@ -1387,7 +1386,7 @@ exports.leaveTeamForCoach = functions.https.onCall(async (data, context) => {
 
 
     // update team name to "_"
-    await db.collection("teams").doc(teamId).update({teamName: "_"});
+    // await db.collection("teams").doc(teamId).update({teamName: "_"});
 
     // remove coach from team members
     await db.collection("teams").doc(teamId).collection("members").doc(coachid).delete();
