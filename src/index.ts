@@ -106,12 +106,8 @@ export interface Tournament {
 // Trigger for updates on notifications
 export const onNotificationUpdate = functions.firestore
   .document("/notifications/{notificationId}")
-  .onUpdate(async (change, context) => {
+  .onUpdate(async (change) => {
     // get uid
-    const editorid = context.auth?.uid;
-    if (!editorid) {
-      return;
-    }
     const beforeData = {
       ...change.before.data(),
       id: change.after.id} as Notification;
@@ -127,6 +123,14 @@ export const onNotificationUpdate = functions.firestore
       if (type === "request_to_join_team" && afterData.action === "accept") {
         const userId = afterData.from_id;
         const teamId = afterData.to_id;
+        // // check if editor is team coach
+        // const editorDoc = await db.collection("teams").doc(teamId).collection("members").doc(editorid).get();
+        // if (!editorDoc.exists) {
+        //   return;
+        // }
+        // if ((editorDoc.data() as Member)?.role !== "coach") {
+        //   return;
+        // }
         // Check user account type should be player
         const userDoc = await db.collection("/users").doc(userId).get();
 
@@ -246,6 +250,10 @@ export const onNotificationUpdate = functions.firestore
       } else if (type === "invite_to_team" && afterData.action === "accept") {
         const teamId = afterData.from_id;
         const userId = afterData.to_id;
+        // check if editor is userId
+        // if (editorid !== userId) {
+        //   return;
+        // }
         // Check user account type should be player
         const userDoc = await db.collection("/users").doc(userId).get();
         if (!userDoc.exists) {
@@ -364,6 +372,14 @@ export const onNotificationUpdate = functions.firestore
       } else if (type === "match_chalenge" && afterData.action === "accept") {
         const fromId = afterData.from_id; // Team ID
         const toId = afterData.to_id; // Team ID
+        // check if editor is team coach of the team that the requested send to
+        // const editorDoc = await db.collection("teams").doc(toId).collection("members").doc(editorid).get();
+        // if (!editorDoc.exists) {
+        //   return;
+        // }
+        // if ((editorDoc.data() as Member)?.role !== "coach") {
+        //   return;
+        // }
         // check if fromId and toId are the same
         if (fromId === toId) {
           // send notification to the team that the challenge request
@@ -468,6 +484,10 @@ export const onNotificationUpdate = functions.firestore
       } else if (type === "refree_invite") {
         const matchId = afterData.from_id;
         const refreeId = afterData.to_id;
+        // check if editor is  refreeId
+        // if (editorid !== refreeId) {
+        //   return;
+        // }
         // check if refreeId is refree
         const refreeDoc = await db.collection("users").doc(refreeId).get();
         if (!refreeDoc.exists) {
@@ -554,43 +574,300 @@ export const onNotificationUpdate = functions.firestore
           };
           await db.collection("notifications").add(notification3);
         }
+      } else if (type === "request_to_join_tournament" && afterData.action === "accept") {
+        const teamId = afterData.from_id;
+        const tournamentId = afterData.to_id;
+        // check if editor is tournament manager
+        // const editorDoc = await db.collection("users").doc(editorid).get();
+        // if (!editorDoc.exists) {
+        //   return;
+        // }
+        // if ((editorDoc.data() as User)?.accountType !== "tournament_manager") {
+        //   return;
+        // }
+
+        // get tournament data
+
+        const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+        if (!tournamentDoc.exists) {
+          return;
+        }
+        const tournamentData = tournamentDoc.data() as Tournament;
+        // chekc if tourman manager id == editor id
+        // if (tournamentData.manager_id !== editorid) {
+        //   return;
+        // }
+
+        // check if team is already in a tournament (by checking participants) in tournament
+        if (tournamentData.participants.includes(teamId)) {
+          return;
+        }
+
+        // get team data
+        const teamDoc = await db.collection("teams").doc(teamId).get();
+        if (!teamDoc.exists) {
+          return;
+        }
+        const teamData = teamDoc.data() as Team;
+
+        // check if team members is more then min_members that tournament requested
+
+        const teamMembers = await db.collection(`/teams/${teamId}/members`).get();
+        if (teamMembers.size < tournamentData.min_members_in_team) {
+          // send notification to the team that the request has been declined
+          const notification: NotificationFireStore = {
+            from_id: tournamentId,
+            to_id: teamId,
+            title: "Request Declined",
+            // eslint-disable-next-line max-len
+            message: `You can't join the tournament ${tournamentData.name} because your team members are less than the required number.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification);
+          // send notification to the tournament manager that the request has been declined
+          const notification2: NotificationFireStore = {
+            from_id: teamId,
+            to_id: tournamentId,
+            title: "Request Declined",
+            // eslint-disable-next-line max-len
+            message: `The team ${teamData.teamName} can't join the tournament ${tournamentData.name} because the team members are less than the required number.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        }
+        //  check if participants lenght === max_participants or more
+        if (tournamentData.participants.length >= tournamentData.max_participants) {
+          // send notification to the team that the request has been declined
+          const notification: NotificationFireStore = {
+            from_id: tournamentId,
+            to_id: teamId,
+            title: "Request Declined",
+            // eslint-disable-next-line max-len
+            message: `Your Team can't join the tournament ${tournamentData.name} because the tournament is full.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification);
+          // send notification to the tournament manager that the request has been declined
+          const notification2: NotificationFireStore = {
+            from_id: teamId,
+            to_id: tournamentId,
+            title: "Request Declined",
+            // eslint-disable-next-line max-len
+            message: `The team ${teamData.teamName} can't join the tournament ${tournamentData.name} because the tournament is full`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        }
+        // add the team to the tournament
+        await db.collection("tournaments").doc(tournamentId).update({
+          participants: admin.firestore.FieldValue.arrayUnion(teamId),
+        });
+
+        // send notification to the team that the request has been accepted
+        const notification: NotificationFireStore = {
+          from_id: tournamentId,
+          to_id: teamId,
+          title: "Request Accepted",
+          message: `Your team has been added to the tournament ${tournamentData.name}.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification);
+        // send notification to the tournament manager that the team has been added
+        const notification2: NotificationFireStore = {
+          from_id: teamId,
+          to_id: tournamentId,
+          title: "Team Added",
+          message: `Your team has been added to the tournament ${tournamentData.name}.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification2);
+      } else if (type === "invite_to_tournament" && afterData.action === "accept") {
+        const teamId = afterData.to_id;
+        const tournamentId = afterData.from_id;
+        // check if editor is teamId coach
+        // const editorDoc = await db.collection("users").doc(editorid).get();
+        // if (!editorDoc.exists) {
+        //   return;
+        // }
+        // if ((editorDoc.data() as User)?.accountType !== "coach") {
+        //   return;
+        // }
+        // get team data
+        const teamDoc = await db.collection("teams").doc(teamId).get();
+        if (!teamDoc.exists) {
+          return;
+        }
+        const teamData = teamDoc.data() as Team;
+        // check if editor is the team coach in subcollection members inside team
+        // const teamMemberDoc = await db.collection(`/teams/${teamId}/members`).doc(editorid).get();
+        // if (!teamMemberDoc.exists) {
+        //   return;
+        // }
+        // if ((teamMemberDoc.data() as Member)?.role !== "coach") {
+        //   return;
+        // }
+        // get tournament data
+        const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+        if (!tournamentDoc.exists) {
+          return;
+        }
+        const tournamentData = tournamentDoc.data() as Tournament;
+        // check if team is already in a tournament (by checking participants) in tournament
+        if (tournamentData.participants.includes(teamId)) {
+          return;
+        }
+        // check if team members is more then min_members that tournament requested
+        const teamMembers = await db.collection(`/teams/${teamId}/members`).get();
+        if (teamMembers.size < tournamentData.min_members_in_team) {
+          // send notification to the team that the request has been declined
+          const notification: NotificationFireStore = {
+            from_id: tournamentId,
+            to_id: teamId,
+            title: "Invite Declined",
+            // eslint-disable-next-line max-len
+            message: `You can't join the tournament ${tournamentData.name} because your team members are less than the required number.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification);
+          // send notification to the tournament manager that the request has been declined
+          const notification2: NotificationFireStore = {
+            from_id: teamId,
+            to_id: tournamentId,
+            title: "Invite Declined",
+            // eslint-disable-next-line max-len
+            message: `The team ${teamData.teamName} can't join the tournament ${tournamentData.name} because the team members are less than the required number.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        }
+        //  check if participants lenght === max_participants or more
+        if (tournamentData.participants.length >= tournamentData.max_participants) {
+          // send notification to the team that the request has been declined
+          const notification: NotificationFireStore = {
+            from_id: tournamentId,
+            to_id: teamId,
+            title: "Invite Declined",
+            // eslint-disable-next-line max-len
+            message: `Your Team can't join the tournament ${tournamentData.name} because the tournament is full.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification);
+          // send notification to the tournament manager that the request has been declined
+          const notification2: NotificationFireStore = {
+            from_id: teamId,
+            to_id: tournamentId,
+            title: "Invite Declined",
+            // eslint-disable-next-line max-len
+            message: `The team ${teamData.teamName} can't join the tournament ${tournamentData.name} because the tournament is full`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification2);
+          return;
+        }
+        // add the team to the tournament
+        await db.collection("tournaments").doc(tournamentId).update({
+          participants: admin.firestore.FieldValue.arrayUnion(teamId),
+        });
+
+        // send notification to the team that the request has been accepted
+        const notification: NotificationFireStore = {
+          from_id: tournamentId,
+          to_id: teamId,
+          title: "Invite Accepted",
+          message: `Your team has been added to the tournament ${tournamentData.name}.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification);
+        // send notification to the tournament manager that the team has been added
+        const notification2: NotificationFireStore = {
+          from_id: teamId,
+          to_id: tournamentId,
+          title: "Team Added",
+          message: `Your team has been added to the tournament ${tournamentData.name}.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification2);
+      } else if (type === "invite_referee_to_tournament" && afterData.action === "accept") {
+        const tournamentId = afterData.from_id;
+        const refreeId = afterData.to_id;
+        // check if referreid is editor
+        // if (editorid !== refreeId) {
+        //   return;
+        // }
+        // check if refreeId is refree
+        const refreeDoc = await db.collection("users").doc(refreeId).get();
+        if (!refreeDoc.exists) {
+          return;
+        }
+        if ((refreeDoc.data() as User)?.accountType !== "refree") {
+          return;
+        }
+        // get tournament data
+        const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+        if (!tournamentDoc.exists) {
+          return;
+        }
+        const tournamentData = tournamentDoc.data() as Tournament;
+        // check if refreeId is in the tournament refree_ids
+        if (!tournamentData.refree_ids.includes(refreeId)) {
+          return;
+        }
+        // update tournament data
+        await db.collection("tournaments").doc(tournamentId).update({
+          refree_ids: admin.firestore.FieldValue.arrayUnion(refreeId),
+        });
+        // send notification to the refree the tournament has added to his profile
+        const notification: NotificationFireStore = {
+          from_id: tournamentId,
+          to_id: refreeId,
+          title: "Tournament Added",
+          message: `The tournament ${tournamentData.name} has been added to your profile.`,
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+
+        await db.collection("notifications").add(notification);
+
+        // send notification to the tournament manager that the refree accept the Invite
+        const notification2: NotificationFireStore = {
+          from_id: refreeId,
+          to_id: tournamentId,
+          title: "Refree Invite Accepted",
+          message: "The refree has accepted the invite.",
+          createdAt: admin.firestore.Timestamp.now(),
+          action: null,
+          type: "info",
+        };
+        await db.collection("notifications").add(notification2);
       }
-      // else if (type === "request_to_join_tournament" && afterData.action === "accept") {
-      //   const teamId = afterData.from_id;
-      //   const tournamentId = afterData.to_id;
-      //   // check if editor is tournament manager
-      //   const editorDoc = await db.collection("users").doc(editorid).get();
-      //   if (!editorDoc.exists) {
-      //     return;
-      //   }
-      //   if ((editorDoc.data() as User)?.accountType !== "tournament_manager") {
-      //     return;
-      //   }
-
-
-      //   // get tournament data
-
-      //   const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
-      //   if (!tournamentDoc.exists) {
-      //     return;
-      //   }
-      //   const tournamentData = tournamentDoc.data() as Tournament;
-      //   // chekc if tourman manager id == editor id
-      //   if (tournamentData.manager_id !== editorid) {
-      //     return;
-      //   }
-
-      //   // check if team is already in a tournament (by checking participants) in tournament
-      //   if (tournamentData.participants.includes(teamId)) {
-      //     return;
-      //   }
-      //   // checking if the team is already in a tournament using query where array-contains
-      //   // const teamTournaments = await db.collection("tournaments").where("participants", "array-contains", teamId).where("s").get();
-
-      //   // add the team to the tournament
-      //   // send notification to the team that the request has been accepted
-      //   // send notification to the tournament manager that the team has been added
-      // }
     }
   });
 
