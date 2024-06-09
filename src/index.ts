@@ -8,11 +8,12 @@ const db = admin.firestore();
 export type Action = "accept" | "decline" | "view";
 type NotificationType = "info"
 | "request_to_join_team"
-| "request_to_join_tournement"
+| "request_to_join_tournament"
 | "match_chalenge"
 | "refree_invite"
 | "invite_to_team"
-| "invite_to_tournement";
+| "invite_to_tournament"
+| "invite_referee_to_tournament";
 
 interface NotificationFireStore {
   from_id: string;
@@ -53,7 +54,7 @@ export interface Match {
   endedAt: Timestamp|null;
   location: string | null;
   status: MatchStatus;
-  type: "tournement" | "classic_match";
+  type: "tournament" | "classic_match";
 }
 
 type accountT = "user" | "coach" | "refree" | "tournament_manager" | "player";
@@ -83,10 +84,34 @@ export interface Team {
   createdBy: string;
 }
 
+export interface Tournament {
+  id: string;
+  name: string;
+  logo: string;
+  description: string;
+  start_date: Timestamp;
+  end_date: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  created_by: string;
+  manager_id:string;
+  refree_ids: string[];
+  location: string;
+  participants: string[];
+  status: "pending" | "in-progress" | "finish" | "cancled";
+  min_members_in_team: number;
+  max_participants: number;
+}
+
 // Trigger for updates on notifications
 export const onNotificationUpdate = functions.firestore
   .document("/notifications/{notificationId}")
-  .onUpdate(async (change) => {
+  .onUpdate(async (change, context) => {
+    // get uid
+    const editorid = context.auth?.uid;
+    if (!editorid) {
+      return;
+    }
     const beforeData = {
       ...change.before.data(),
       id: change.after.id} as Notification;
@@ -530,6 +555,42 @@ export const onNotificationUpdate = functions.firestore
           await db.collection("notifications").add(notification3);
         }
       }
+      // else if (type === "request_to_join_tournament" && afterData.action === "accept") {
+      //   const teamId = afterData.from_id;
+      //   const tournamentId = afterData.to_id;
+      //   // check if editor is tournament manager
+      //   const editorDoc = await db.collection("users").doc(editorid).get();
+      //   if (!editorDoc.exists) {
+      //     return;
+      //   }
+      //   if ((editorDoc.data() as User)?.accountType !== "tournament_manager") {
+      //     return;
+      //   }
+
+
+      //   // get tournament data
+
+      //   const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+      //   if (!tournamentDoc.exists) {
+      //     return;
+      //   }
+      //   const tournamentData = tournamentDoc.data() as Tournament;
+      //   // chekc if tourman manager id == editor id
+      //   if (tournamentData.manager_id !== editorid) {
+      //     return;
+      //   }
+
+      //   // check if team is already in a tournament (by checking participants) in tournament
+      //   if (tournamentData.participants.includes(teamId)) {
+      //     return;
+      //   }
+      //   // checking if the team is already in a tournament using query where array-contains
+      //   // const teamTournaments = await db.collection("tournaments").where("participants", "array-contains", teamId).where("s").get();
+
+      //   // add the team to the tournament
+      //   // send notification to the team that the request has been accepted
+      //   // send notification to the tournament manager that the team has been added
+      // }
     }
   });
 
