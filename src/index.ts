@@ -1410,9 +1410,12 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
         );
       }
       if (updateData.type === "set_in_progress") {
-        // update match data
+        // update match data set score 0 - 0
         await db.collection("matches").doc(matchid).update({
           status: "in_progress",
+          startIn: admin.firestore.Timestamp.now(),
+          team1: {id: matchData.team1.id, score: 0, isAgreed: true},
+          team2: {id: matchData.team2.id, score: 0, isAgreed: true},
         });
       } else if (updateData.type === "edit_result") {
         if (!updateData.result) {
@@ -1426,8 +1429,6 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
           team1: {id: matchData.team1.id, score: updateData.result.team1, isAgreed: true},
           team2: {id: matchData.team2.id, score: updateData.result.team2, isAgreed: true},
           refree: {id: matchData.refree.id, isAgreed: true},
-          startIn: admin.firestore.Timestamp.now(),
-          status: "in_progress",
         });
       } else if (updateData.type === "cancel_match") {
         // update match data
@@ -1473,30 +1474,71 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       await db.collection("notifications").add(notification2);
 
       // send notification to winner
-      if (updateData.type === "end_match" && matchData.team1.score && matchData.team2.score && matchData.team1.score !== matchData.team2.score) {
-        // send notification for only winner not in draw or lose
+      if (updateData.type === "end_match" && matchData.team1.score && matchData.team2.score ) {
+        // send notification to teams and congrate the winner
         if (matchData.team1.score > matchData.team2.score) {
           const notification3: NotificationFireStore = {
             from_id: matchid,
             to_id: matchData.team1.id,
-            title: "Yeaaaah",
-            message: "Congratulations! You have won the match.",
+            title: "Match Finished",
+            message: `Congratulation! Your team ${team1Name} has won the match.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "info",
           };
           await db.collection("notifications").add(notification3);
+          const notification4: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team2.id,
+            title: "Match Finished",
+            message: `Your team ${team2Name} has lost the match.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification4);
         } else if (matchData.team1.score < matchData.team2.score) {
           const notification3: NotificationFireStore = {
             from_id: matchid,
             to_id: matchData.team2.id,
-            title: "Yeaaaah",
-            message: "Congratulations! You have won the match.",
+            title: "Match Finished",
+            message: `Congratulation! Your team ${team2Name} has won the match.`,
             createdAt: admin.firestore.Timestamp.now(),
             action: null,
             type: "info",
           };
           await db.collection("notifications").add(notification3);
+          const notification4: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team1.id,
+            title: "Match Finished",
+            message: `Your team ${team1Name} has lost the match.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification4);
+        } else {
+          const notification3: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team1.id,
+            title: "Match Finished",
+            message: `The match between ${team1Name} and ${team2Name} has ended in a draw.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification3);
+          const notification4: NotificationFireStore = {
+            from_id: matchid,
+            to_id: matchData.team2.id,
+            title: "Match Finished",
+            message: `The match between ${team1Name} and ${team2Name} has ended in a draw.`,
+            createdAt: admin.firestore.Timestamp.now(),
+            action: null,
+            type: "info",
+          };
+          await db.collection("notifications").add(notification4);
         }
       }
     }
@@ -1848,11 +1890,12 @@ exports.createTeam = functions.https.onCall(async (data: TeamData, context) => {
   const coachid = context.auth.uid;
 
   try {
-    // team name should be between 4 and 30 caracters and lower case
-    if (teamName.length < 4 || teamName.length > 30) {
+    // check team name should be between 4 and 30 caracters and lower case and containe only letters and numbers and _ and no spaces
+    const teamNameRegex = /^[a-z0-9_]{4,30}$/;
+    if (!teamNameRegex.test(teamName)) {
       throw new functions.https.HttpsError(
         "invalid-argument",
-        "Team name must be between 4 and 30 characters."
+        "Team name must be between 4 and 30 characters and contain only letters, numbers, and _."
       );
     }
     if (teamName !== teamName.toLowerCase()) {
@@ -1957,12 +2000,16 @@ exports.updateTeam = functions.https.onCall(async (data: UpdateTeamData, context
   const coachid = context.auth.uid;
 
   try {
-    // team name should be between 4 and 30 caracters and lower case
-    if (teamName && (teamName.length < 4 || teamName.length > 30)) {
-      throw new functions.https.HttpsError(
-        "invalid-argument",
-        "Team name must be between 4 and 30 characters."
-      );
+    // check team name
+    if (teamName) {
+      // check team name should be between 4 and 30 caracters and lower case and containe only letters and numbers and _ and no spaces
+      const teamNameRegex = /^[a-z0-9_]{4,30}$/;
+      if (!teamNameRegex.test(teamName)) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Team name must be between 4 and 30 characters and contain only letters, numbers, and _."
+        );
+      }
     }
     if (teamName && teamName !== teamName.toLowerCase()) {
       throw new functions.https.HttpsError(
@@ -2056,6 +2103,22 @@ exports.createUser = functions.https.onCall(async (data: UserData, context) => {
       "The function require username parameter."
     );
   }
+  // check if username is lowercase and between 4 to 30 caracters and container no spaces juset caracters and numbers and underscores using regix and change it if was
+  if (!/^[a-z0-9_]{4,30}$/.test(username)) {
+    // change username and make it valid
+    // make username lowercase
+    let eusername = username.toLowerCase();
+    // remove all spaces and non (a-z0-9_) caracters
+    eusername = eusername.replace(/[^a-z0-9_]/g, "");
+    // username should be between 4 and 30 characters
+    if (eusername.length < 4 ) {
+      eusername += Math.random().toString(36).substring(7).toLowerCase();
+    }
+    if (eusername.length > 30) {
+      eusername = eusername.substring(0, 30);
+    }
+  }
+
   // require auth
   if (!context.auth) {
     throw new functions.https.HttpsError(
@@ -2159,8 +2222,15 @@ exports.updateUser = functions.https.onCall(async (data: UpdateUserData, context
     }
     // Check if the username is unique
     if (username) {
-      // username should be lowercase thwo error
-      const eusername = username.toLowerCase();
+      // check username
+      const eusername = username;
+      if (!/^[a-z0-9_]{4,30}$/.test(eusername)) {
+        // throw error if username is not valid
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Username must contain only letters, numbers, and underscores."
+        );
+      }
       // username should be between 4 and 30 characters
       if (eusername.length < 4 || eusername.length > 30) {
         throw new functions.https.HttpsError(
