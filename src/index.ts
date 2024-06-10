@@ -832,11 +832,13 @@ export const onNotificationUpdate = functions.firestore
         // get tournament data
         const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
         if (!tournamentDoc.exists) {
+          console.log("tournament not found");
           return;
         }
         const tournamentData = tournamentDoc.data() as Tournament;
         // check if refreeId is in the tournament refree_ids
-        if (!tournamentData.refree_ids.includes(refreeId)) {
+        if (tournamentData.refree_ids.includes(refreeId)) {
+          console.log("refree is already in the tournament refree_ids");
           return;
         }
         // update tournament data
@@ -2276,8 +2278,25 @@ exports.changeAccountType = functions.https.onCall(async (data: {accountType: ac
           "The user is refree in a match that is not finish or cancled."
         );
       }
+      // check if referee already in a tournament referee_ids list
+      const tournamentsSnapshot = await db.collection("tournaments").where("referee_ids", "array-contains", uid).get();
+      if (!tournamentsSnapshot.empty) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The user is referee in a tournament."
+        );
+      }
     }
-
+    // if accountType was tournament_manager we need to check if the user is manager in any tournament that not canceld or finish
+    if (userData.accountType === "tournament_manager") {
+      const tournamentsSnapshot = await db.collection("tournaments").where("manager_id", "==", uid).where("status", "not-in", ["finish", "cancled"]).get();
+      if (!tournamentsSnapshot.empty) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "The user is manager in a tournament that is not finish or cancled."
+        );
+      }
+    }
     // Update the user document with the new data
     await db.collection("users").doc(uid).update({accountType: accountType});
 
