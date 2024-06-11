@@ -1361,7 +1361,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
           await db.collection("notifications").add(notification);
           // update match data
           await db.collection("matches").doc(matchid).update({
-            team2: {id: matchData.team1.id, score: null, isAgreed: true},
+            team2: {id: matchData.team2.id, score: null, isAgreed: true},
             status: "refree_waiting",
           });
           // send notification to other caoch that the coach has accept the match details
