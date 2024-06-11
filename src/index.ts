@@ -1298,6 +1298,10 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       }
       // check if data is same and the other coach is agree if true send refree invite notification
       // if the new data from editor === old data && the other coach is agreed => send refree invite notification
+      // console.log("matchData", matchData);
+      // console.log("updateData", updateData);
+      // console.log("coach1 is the editor:", coach1);
+      // console.log("coach2 is the editor:", coach2);
       if (coach1) {
         if (
           matchData.refree.id === updateData.refreeid &&
@@ -1345,7 +1349,7 @@ exports.updateMatch = functions.https.onCall(async (data: UpdateMatchData, conte
       } else {
         if (
           matchData.refree.id === updateData.refreeid &&
-          matchData.startIn === updateData.startIn &&
+          matchData.startIn?.toMillis() === updateData.startIn.toMillis() &&
           matchData.location === updateData.location && matchData.team1.isAgreed
         ) {
           // send notification to the refree
@@ -2381,3 +2385,349 @@ exports.changeAccountType = functions.https.onCall(async (data: {accountType: ac
   }
 }
 );
+
+// leave tournament for team
+// check auth user and get uid
+// is uid the coach of teamid
+// get tournament
+// is team in the tournament
+// is tournament in pending status
+// leave tournament
+// send notification to tournament and team
+
+exports.leaveTournamentForTeam = functions.https.onCall(async (data: {tournamentId: string, teamid:string}, context) => {
+  const {tournamentId, teamid} = data;
+  if (!tournamentId || !teamid) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require (tournamentId,teamid) parameters."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const coachid = context.auth.uid;
+
+  try {
+    // check if user account is coach
+    const userDoc = await db.collection("users").doc(coachid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    if (userData.accountType !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user is not a coach."
+      );
+    }
+    // check if the team exists
+    const teamDoc = await db.collection("teams").doc(teamid).get();
+    if (!teamDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified team does not exist."
+      );
+    }
+    // get teamInfo
+    const teamData = teamDoc.data() as Team;
+    // check if auth is the coach of team by checking his role in members subcollection of team
+    const coachDoc = await db.collection("teams").doc(teamid).collection("members").doc(coachid).get();
+    if (!coachDoc.exists || coachDoc.data()?.role !== "coach") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified coach is not a coach of the team."
+      );
+    }
+    // check if the team is in the tournament
+    const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+    if (!tournamentDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified tournament does not exist."
+      );
+    }
+    const tournamentData = tournamentDoc.data() as Tournament;
+    // check if the team is in the tournament participants array
+    if (!tournamentData.participants.includes(teamid)) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The team is not in the tournament."
+      );
+    }
+    // check if the tournament is in pending status
+    if (tournamentData.status !== "pending") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The tournament is not in pending status, after tournament start you can't leave it."
+      );
+    }
+    // leave tournament
+    // remove team from tournament paticipants array
+    const newTeams = tournamentData.participants.filter((team) => team !== teamid);
+    await db.collection("tournaments").doc(tournamentId).update({participants: newTeams});
+    // send notification to tournament
+    const notification1: NotificationFireStore = {
+      from_id: teamid,
+      to_id: tournamentId,
+      title: "Team Left",
+      message: `The team ${teamData.teamName} has left the tournament ${tournamentData.name}.`,
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification1);
+    // send notification to team
+    const notification2: NotificationFireStore = {
+      from_id: tournamentId,
+      to_id: teamid,
+      title: "Tournament Left",
+      message: `The team ${teamData.teamName} has left the tournament ${tournamentData.name}.`,
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification2);
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error leaving tournament for team: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while leaving tournament for team."
+    );
+  }
+}
+);
+
+// leave tournament for referee
+// check auth user and get uid
+// is uid the referee
+// get tournament
+// is referee in the tournament
+// is tournament in pending status
+// leave tournament
+// send notification to tournament and referee
+
+exports.leaveTournamentForReferee = functions.https.onCall(async (data: {tournamentId: string}, context) => {
+  const {tournamentId} = data;
+  if (!tournamentId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require tournamentId parameter."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const refereeid = context.auth.uid;
+
+  try {
+    // check if user account is referee
+    const userDoc = await db.collection("users").doc(refereeid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    if (userData.accountType !== "refree") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user is not a referee."
+      );
+    }
+    // check if the referee is in the tournament
+    const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+    if (!tournamentDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified tournament does not exist."
+      );
+    }
+    const tournamentData = tournamentDoc.data() as Tournament;
+    // check if the referee is in the tournament referee_ids array
+    if (!tournamentData.refree_ids.includes(refereeid)) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The referee is not in the tournament."
+      );
+    }
+    // check if the tournament is in pending status
+    if (tournamentData.status !== "pending") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The tournament is not in pending status, after tournament start you can't leave it."
+      );
+    }
+    // leave tournament
+    // remove referee from tournament referee_ids array
+    const newReferees = tournamentData.refree_ids.filter((referee) => referee !== refereeid);
+    await db.collection("tournaments").doc(tournamentId).update({refree_ids: newReferees});
+    // send notification to tournament
+    const notification1: NotificationFireStore = {
+      from_id: refereeid,
+      to_id: tournamentId,
+      title: "Referee Left",
+      message: `The referee ${userData.username} has left the tournament ${tournamentData.name}.`,
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification1);
+    // send notification to referee
+    const notification2: NotificationFireStore = {
+      from_id: tournamentId,
+      to_id: refereeid,
+      title: "Tournament Left",
+      message: `The referee ${userData.username} has left the tournament ${tournamentData.name}.`,
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification2);
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error leaving tournament for referee: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while leaving tournament for referee."
+    );
+  }
+}
+);
+
+// remove tournament that in pending status
+// check auth user and get uid
+// is uid the manager of tournamentid
+// get tournament
+// is tournament in pending status
+// remove tournament
+// send notification to manager id and all referees and all teams that tournament has canceld
+
+exports.removeTournament = functions.https.onCall(async (data: {tournamentId: string}, context) => {
+  const {tournamentId} = data;
+  if (!tournamentId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "The function require tournamentId parameter."
+    );
+  }
+  // require auth
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "The function require authentication."
+    );
+  }
+  // get uid
+  const managerid = context.auth.uid;
+
+  try {
+    // check if user account is tournament_manager
+    const userDoc = await db.collection("users").doc(managerid).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user does not exist."
+      );
+    }
+    const userData = userDoc.data() as User;
+    if (userData.accountType !== "tournament_manager") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified user is not a tournament manager."
+      );
+    }
+    // check if the tournament exists
+    const tournamentDoc = await db.collection("tournaments").doc(tournamentId).get();
+    if (!tournamentDoc.exists) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified tournament does not exist."
+      );
+    }
+    const tournamentData = tournamentDoc.data() as Tournament;
+    // check if auth is the manager of tournament by checking his role in manager_id field of tournament
+    if (tournamentData.manager_id !== managerid) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The specified manager is not a manager of the tournament."
+      );
+    }
+    // check if the tournament is in pending status
+    if (tournamentData.status !== "pending") {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "The tournament is not in pending status."
+      );
+    }
+    // remove tournament
+    await db.collection("tournaments").doc(tournamentId).delete();
+    // send notification to manager
+    const notification1: NotificationFireStore = {
+      from_id: tournamentId,
+      to_id: managerid,
+      title: "Tournament Removed",
+      message: `The tournament ${tournamentData.name} has been removed.`,
+      createdAt: admin.firestore.Timestamp.now(),
+      action: null,
+      type: "info",
+    };
+    await db.collection("notifications").add(notification1);
+    // send notification to all referees
+    for (const refereeid of tournamentData.refree_ids) {
+      const notification2: NotificationFireStore = {
+        from_id: tournamentId,
+        to_id: refereeid,
+        title: "Tournament Cancelled",
+        message: `The tournament ${tournamentData.name} has been cancelled.`,
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification2);
+    }
+    // send notification to all teams
+    for (const teamid of tournamentData.participants) {
+      const notification3: NotificationFireStore = {
+        from_id: tournamentId,
+        to_id: teamid,
+        title: "Tournament Cancelled",
+        message: `The tournament ${tournamentData.name} has been cancelled.`,
+        createdAt: admin.firestore.Timestamp.now(),
+        action: null,
+        type: "info",
+      };
+      await db.collection("notifications").add(notification3);
+    }
+
+    return {success: true};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error:any) {
+    console.error("Error removing tournament: ", error);
+    throw new functions.https.HttpsError(
+      error?.code || "unknown",
+      error?.message || "An error occurred while removing tournament."
+    );
+  }
+}
+);
+
